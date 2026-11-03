@@ -2,6 +2,36 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
+### Clerk + Convex authentication
+
+Set these variables in `.env.local` (keep this file untracked):
+
+```dotenv
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=<Clerk publishable key>
+CLERK_SECRET_KEY=<Clerk secret key>
+CONVEX_DEPLOYMENT=dev:<your development deployment>
+NEXT_PUBLIC_CONVEX_URL=https://<your deployment>.convex.cloud
+CLERK_FRONTEND_API_URL=https://<your Clerk instance>.clerk.accounts.dev
+```
+
+Enable the Convex integration in the Clerk dashboard. An existing Clerk JWT
+template named `convex` with audience `convex` is also supported by the client.
+Set `CLERK_FRONTEND_API_URL` in the **Convex deployment's environment variables**
+as well: `.env.local` alone does not configure the remote backend. Use the Clerk
+instance matching the environment (development or production).
+
+Run `npx convex dev` alongside `npm run dev` to sync backend functions and auth
+configuration. `ClerkProvider` wraps `ConvexProviderWithClerk`, which forwards and
+refreshes Clerk tokens automatically. `/signin` and `/signup` remain local routes.
+
+For components that call authenticated Convex functions, use `Authenticated` or
+`useConvexAuth` from `convex/react` so calls wait for Convex to validate the token.
+In backend functions, derive identity from `await ctx.auth.getUserIdentity()`;
+reject missing identity and enforce ownership there, never trust a caller's user ID.
+
+See the [Convex + Clerk guide](https://docs.convex.dev/auth/clerk) for dashboard
+setup and separate development/production configuration.
+
 First, run the development server:
 
 ```bash
