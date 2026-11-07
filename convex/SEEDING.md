@@ -49,13 +49,15 @@ IDs, timestamps, and tool references intact.
 
 ## Dashboard
 
-The homepage reads these records through `catalog:categories` and paginated
-`catalog:publicTools` queries. Dashboard cards expose name, category, description,
-and condition, both before and after sign-in, and omit owner/contact data.
-The dashboard excludes paused/removed tools,
-inactive categories, active loans, and scheduled loans whose interval includes
-the supplied time at page load. No periodic timer resets the query or scroll
-position. Database changes remain reactive.
+The homepage reads categories and the paginated publicTools projection before
+sign-in: cards contain only name/category. Signed-in users use memberTools,
+which adds description, condition, availability, and isOwner/canBorrow flags.
+Private detail pages preserve complete text. Public cards exclude unavailable
+listings; member cards replace Borrow with a pending/borrowed/overdue status badge while
+a tool is held or awaiting approval. Titles are plain text rather than links.
+No periodic timer resets queries or scroll position; database changes remain reactive.
+An overdue tool stays unavailable until its owner records return.
+
 Search prioritizes name (weight 3), description (2), then condition (1), using
 the highest matching field. Convex relevance orders matches within each tier.
 Each tier uses an indexed, paginated query with category/status/owner filters;

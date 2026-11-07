@@ -1,0 +1,342 @@
+{
+  "id": "lendloop-overdue",
+  "name": "LendLoop · Daily overdue reminders",
+  "active": false,
+  "nodes": [
+    {
+      "id": "daily-at-08-utc",
+      "name": "Daily at 08 UTC",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "id": "start-page",
+      "name": "Start page",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "return [{json:{cursor:null,pages:0}}];"
+      },
+      "position": [
+        200,
+        0
+      ]
+    },
+    {
+      "id": "prepare-overdue-request",
+      "name": "Prepare overdue request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "// Public configuration, substituted when workflows are generated.\nconst convexOrigin = \"https://scintillating-shepherd-249.eu-west-1.convex.site\";\nfunction prepareRequest(path, value) {\n  if (!convexOrigin.startsWith('https://')) throw new Error('Configure the Convex HTTPS origin.');\n  const body = JSON.stringify(value);\n  const timestamp = String(Math.floor(Date.now() / 1000));\n  return { url: convexOrigin.replace(/\\/$/, '') + path, body, timestamp,\n    signingInput: `${timestamp}.POST.${path}.${body}` };\n}\n\nconst state = $input.first().json;\nconst pages = (state.pages ?? 0) + 1;\nif (pages > 500) throw new Error('Overdue page limit reached; resume manually using the last cursor.');\nreturn [{ json: { ...prepareRequest('/automation/overdue', { cursor: state.cursor ?? null }), pages } }];\n"
+      },
+      "position": [
+        400,
+        0
+      ]
+    },
+    {
+      "id": "sign-overdue-request",
+      "name": "Sign overdue request",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 2,
+      "parameters": {
+        "action": "hmac",
+        "type": "SHA256",
+        "binaryData": false,
+        "value": "={{$json.signingInput}}",
+        "dataPropertyName": "signature",
+        "encoding": "hex"
+      },
+      "position": [
+        600,
+        0
+      ],
+      "notes": "Select the LendLoop HMAC credential. Never enter the secret in node parameters."
+    },
+    {
+      "id": "fetch-overdue",
+      "name": "Fetch overdue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "method": "POST",
+        "url": "={{$json.url}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-lendloop-timestamp",
+              "value": "={{$json.timestamp}}"
+            },
+            {
+              "name": "x-lendloop-signature",
+              "value": "={{$json.signature}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{$json.body}}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "position": [
+        800,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    },
+    {
+      "id": "prepare-reminders",
+      "name": "Prepare reminders",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "// Public configuration, substituted when workflows are generated.\nconst convexOrigin = \"https://scintillating-shepherd-249.eu-west-1.convex.site\";\nfunction prepareRequest(path, value) {\n  if (!convexOrigin.startsWith('https://')) throw new Error('Configure the Convex HTTPS origin.');\n  const body = JSON.stringify(value);\n  const timestamp = String(Math.floor(Date.now() / 1000));\n  return { url: convexOrigin.replace(/\\/$/, '') + path, body, timestamp,\n    signingInput: `${timestamp}.POST.${path}.${body}` };\n}\n\nconst page = $input.first().json;\nif (!Array.isArray(page.events) || page.events.length > 25) throw new Error('Invalid overdue page.');\nfor (const event of page.events) {\n  console.log(JSON.stringify({ event: 'reminder.mock', eventId: event.eventId }));\n}\nreturn [{ json: {\n  ...prepareRequest('/automation/complete', { events: page.events.map(event => ({ eventId: event.eventId, idempotencyKey: event.idempotencyKey })) }),\n  cursor: page.cursor, isDone: page.isDone, pages: $('Prepare overdue request').item.json.pages,\n} }];\n"
+      },
+      "position": [
+        1000,
+        0
+      ]
+    },
+    {
+      "id": "sign-reminders",
+      "name": "Sign reminders",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 2,
+      "parameters": {
+        "action": "hmac",
+        "type": "SHA256",
+        "binaryData": false,
+        "value": "={{$json.signingInput}}",
+        "dataPropertyName": "signature",
+        "encoding": "hex"
+      },
+      "position": [
+        1200,
+        0
+      ],
+      "notes": "Select the LendLoop HMAC credential. Never enter the secret in node parameters."
+    },
+    {
+      "id": "record-reminders",
+      "name": "Record reminders",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "method": "POST",
+        "url": "={{$json.url}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-lendloop-timestamp",
+              "value": "={{$json.timestamp}}"
+            },
+            {
+              "name": "x-lendloop-signature",
+              "value": "={{$json.signature}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{$json.body}}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "position": [
+        1400,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    },
+    {
+      "id": "next-page",
+      "name": "Next page",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "const page = $('Prepare reminders').item.json; return [{json:{cursor:page.cursor,isDone:page.isDone,pages:page.pages}}];"
+      },
+      "position": [
+        1600,
+        0
+      ]
+    },
+    {
+      "id": "finished",
+      "name": "Finished",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "parameters": {
+        "conditions": {
+          "options": {
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{$json.isDone}}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "position": [
+        1800,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Daily at 08 UTC": {
+      "main": [
+        [
+          {
+            "node": "Start page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start page": {
+      "main": [
+        [
+          {
+            "node": "Prepare overdue request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare overdue request": {
+      "main": [
+        [
+          {
+            "node": "Sign overdue request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign overdue request": {
+      "main": [
+        [
+          {
+            "node": "Fetch overdue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch overdue": {
+      "main": [
+        [
+          {
+            "node": "Prepare reminders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare reminders": {
+      "main": [
+        [
+          {
+            "node": "Sign reminders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign reminders": {
+      "main": [
+        [
+          {
+            "node": "Record reminders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record reminders": {
+      "main": [
+        [
+          {
+            "node": "Next page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Next page": {
+      "main": [
+        [
+          {
+            "node": "Finished",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finished": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Prepare overdue request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "lendloop-errors",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none",
+    "executionTimeout": 300,
+    "timezone": "UTC"
+  }
+}

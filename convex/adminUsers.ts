@@ -27,12 +27,12 @@ export const list = query({
 })
 
 export const update = mutation({
-  args: { userId: v.id('users'), role: v.optional(roleName), trusted: v.optional(v.boolean()) },
+  args: { userId: v.id('users'), role: v.optional(roleName), trusted: v.optional(v.boolean()), isActive: v.optional(v.boolean()) },
   returns: v.null(),
   handler: (ctx, args) => logged('user.update', async () => {
     const actor = await requireAdmin(ctx)
     if (actor._id === args.userId) throw new ConvexError('You cannot change your own permissions.')
-    if (args.role === undefined && args.trusted === undefined) throw new ConvexError('Choose a role or trusted status.')
+    if (args.role === undefined && args.trusted === undefined && args.isActive === undefined) throw new ConvexError('Choose a role, trusted status, or account status.')
     const user = await ctx.db.get('users', args.userId)
     if (!user) throw new ConvexError('User not found.')
     const role = args.role
@@ -41,9 +41,11 @@ export const update = mutation({
     if (args.role && !role) throw new ConvexError('Role is not configured.')
     const roleChanged = role !== null && role._id !== user.roleId
     const trustChanged = args.trusted !== undefined && args.trusted !== user.isTrustedLender
-    if (!roleChanged && !trustChanged) return null
+    const activeChanged = args.isActive !== undefined && args.isActive !== user.isActive
+    if (!roleChanged && !trustChanged && !activeChanged) return null
     await ctx.db.patch('users', user._id, {
       ...(roleChanged ? { roleId: role._id } : {}),
+      ...(activeChanged ? { isActive: args.isActive } : {}),
       ...(trustChanged ? {
         isTrustedLender: args.trusted,
         trustedBy: args.trusted ? actor._id : undefined,
@@ -55,6 +57,7 @@ export const update = mutation({
     await audit(ctx, actor._id, 'user.permissions_updated', 'user', user._id, {
       ...(roleChanged ? { previousRole: previousRole?.name ?? 'user', role: role.name } : {}),
       ...(trustChanged ? { previousTrusted: user.isTrustedLender, trusted: args.trusted } : {}),
+      ...(activeChanged ? { previousActive: user.isActive, isActive: args.isActive } : {}),
     })
     return null
   }),

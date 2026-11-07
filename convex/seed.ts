@@ -3,6 +3,7 @@ import type { Doc, Id } from './_generated/dataModel'
 import { internalMutation } from './_generated/server'
 import { validatedText } from './textValidation'
 import { TEXT_LIMITS } from '../shared/textLimits'
+import { normalizeToolName } from '../shared/toolIdentity'
 
 // Fixture keys associate sample tools; only the category name is stored.
 const categories = {
@@ -92,6 +93,7 @@ export const run = internalMutation({
       roleId: userRoleId,
       isTrustedLender: false,
       isActive: true,
+      unreadAlarmCount: 0,
       updatedAt: now,
     })
     if (!existingOwner) result.usersCreated++
@@ -115,7 +117,7 @@ export const run = internalMutation({
       if (!categoryDoc?.isActive) continue
       if (existingOwner && !existingOwner.isActive) continue
       await ctx.db.insert('tools', {
-        ...tool, ownerId, categoryId, status: 'active', updatedAt: now,
+        ...tool, normalizedName: normalizeToolName(tool.name), ownerId, categoryId, status: 'active', updatedAt: now,
       })
       result.toolsCreated++
     }

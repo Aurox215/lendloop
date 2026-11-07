@@ -4,6 +4,7 @@ import { useAuth } from '@clerk/nextjs'
 import { ConvexReactClient } from 'convex/react'
 import { ConvexProviderWithClerk } from 'convex/react-clerk'
 import { useState, type ReactNode } from 'react'
+import { SessionGuard } from '../components/auth/SessionGuard'
 
 export default function ConvexClientProvider({ children }: { children: ReactNode }) {
   const [convex] = useState(() => {
@@ -18,7 +19,7 @@ export default function ConvexClientProvider({ children }: { children: ReactNode
 
   return (
     <ConvexProviderWithClerk client={convex} useAuth={useAuth}>
-      {children}
+      <SessionGuard>{children}</SessionGuard>
     </ConvexProviderWithClerk>
   )
 }

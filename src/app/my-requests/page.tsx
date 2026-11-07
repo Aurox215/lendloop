@@ -1,1 +1,5 @@
-export { default } from '../page'
+import ToolBoard from '../ToolBoard'
+
+export default function MyRequestsPage() {
+  return <ToolBoard view="my-requests" />
+}

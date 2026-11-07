@@ -6,11 +6,14 @@ import { useAuth } from '@clerk/nextjs'
 import { api } from '../../../convex/_generated/api'
 import { useWorkspace } from '../../app/WorkspaceContext'
 import { ToolForm } from './ToolForm'
+import { ToolBorrowAction } from './ToolBorrowAction'
+import { useState } from 'react'
 
 export function ToolPage({ toolId, edit = false }: { toolId?: string; edit?: boolean }) {
   const { ready } = useWorkspace()
+  const [now] = useState(() => Date.now())
   const { isLoaded, isSignedIn } = useAuth()
-  const tool = useQuery(api.tools.detail, toolId ? { toolId } : 'skip')
+  const tool = useQuery(api.tools.detail, ready && toolId ? { toolId, now } : 'skip')
 
   if ((edit || !toolId) && !ready) {
     return <main className="p-8" role="status">{isLoaded && !isSignedIn ? 'Sign in required.' : 'Loading account…'}</main>
@@ -37,6 +40,7 @@ export function ToolPage({ toolId, edit = false }: { toolId?: string; edit?: boo
           <p className="whitespace-pre-wrap text-emerald-800 [overflow-wrap:anywhere]">{tool.category}</p>
           <p className="whitespace-pre-wrap leading-7 text-stone-600 [overflow-wrap:anywhere]">{tool.description}</p>
           <p className="text-sm text-stone-600">Condition: {tool.condition.replaceAll('_', ' ')}</p>
+          <div className="flex justify-end"><ToolBorrowAction tool={tool} /></div>
           {tool.canEdit && <Link href={`/tools/${tool.id}/edit`} className="inline-block rounded-lg border border-stone-300 px-4 py-2 text-sm hover:bg-white">Edit listing</Link>}
         </div>
       )}

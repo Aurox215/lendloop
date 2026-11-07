@@ -40,6 +40,7 @@ export const ensureUser = mutation({
       tokenIdentifier: identity.tokenIdentifier, clerkId: identity.subject,
       name: identity.name ?? 'Neighbor', roleId: role._id,
       isTrustedLender: false, isActive: true, updatedAt: Date.now(),
+      unreadAlarmCount: 0,
       ...(identity.email ? { email: identity.email } : {}),
     })
     await audit(ctx, id, 'account.created', 'user', id)

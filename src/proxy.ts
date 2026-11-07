@@ -1,16 +1,19 @@
-import { clerkMiddleware } from '@clerk/nextjs/server';
+import { clerkMiddleware } from '@clerk/nextjs/server'
+import { NextResponse } from 'next/server'
+import { isPublicPath } from '../shared/routes'
 
-export default clerkMiddleware({
+export default clerkMiddleware(async (auth, request) => {
+  if (isPublicPath(request.nextUrl.pathname)) return
+  const { userId } = await auth()
+  if (userId) return
+  if (!['GET', 'HEAD'].includes(request.method) || /^\/(api|trpc)(\/|$)/.test(request.nextUrl.pathname)) {
+    return NextResponse.json({ error: 'Sign in required.' }, { status: 401 })
+  }
+  return NextResponse.redirect(new URL('/signin', request.url))
+}, {
   frontendApiProxy: { enabled: true },
-});
+})
 
 export const config = {
-  matcher: [
-    // Skip Next.js internals and all static files, unless found in search params
-    '/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)',
-    // Always run for Clerk's auto-proxy path
-    '/__clerk/:path*',
-    // Always run for API routes
-    '/(api|trpc)(.*)',
-  ],
-};
+  matcher: ['/(.*)'],
+}

@@ -6,7 +6,7 @@ import { Plus } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { api } from '../../convex/_generated/api'
 import type { Id } from '../../convex/_generated/dataModel'
-import { useWorkspace, viewNames } from './WorkspaceContext'
+import { WorkspaceContext, useWorkspace, viewNames, type View } from './WorkspaceContext'
 import { BoardFilters } from '../components/board/BoardFilters'
 import { LoanFeed, RequestFeed, ToolFeed } from '../components/board/Feeds'
 import { CategoriesPanel } from '../components/admin/CategoriesPanel'
@@ -15,7 +15,12 @@ import { Modal } from '../components/ui/Modal'
 import { ToolForm } from '../components/tools/ToolForm'
 import { primaryButtonClassName } from '../components/forms/FieldLabel'
 
-export default function ToolBoard() {
+export default function ToolBoard({ view }: { view: View }) {
+  const workspace = useWorkspace()
+  return <WorkspaceContext value={{ ...workspace, view }}><BoardContent key={view} /></WorkspaceContext>
+}
+
+function BoardContent() {
   const { isLoaded, isSignedIn } = useAuth()
   const { view, ready, admin } = useWorkspace()
   const categories = useQuery(api.catalog.categories)

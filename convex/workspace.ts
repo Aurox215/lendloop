@@ -4,32 +4,31 @@ import { mutation, query } from './_generated/server'
 import { requireAdmin, requireUser } from './access'
 import { toolCondition } from './schema'
 import { audit, logged } from './logging'
+import { activityValidator, latestActivity } from './activity'
 
-const requestRow = v.object({ id: v.id('borrowRequests'), toolId: v.id('tools'), name: v.string(), category: v.string(), description: v.string(), condition: toolCondition, status: v.string(), startAt: v.number(), endAt: v.number() })
+const requestRow = v.object({ id: v.id('borrowRequests'), toolId: v.id('tools'), name: v.string(), category: v.string(), description: v.string(), condition: toolCondition, status: v.string(), startAt: v.number(), endAt: v.number(),
+  borrowerName: v.union(v.string(), v.null()), loanId: v.union(v.id('loans'), v.null()), loanStatus: v.union(v.string(), v.null()), dueAt: v.union(v.number(), v.null()), activity: activityValidator })
 export const requests = query({
   args: { incoming: v.boolean(), paginationOpts: paginationOptsValidator },
   returns: paginationResultValidator(requestRow),
   handler: async (ctx, args) => {
     const user = await requireUser(ctx)
     const rows = await (args.incoming
-      ? ctx.db.query('borrowRequests').withIndex('by_lenderId_and_status', q => q.eq('lenderId', user._id))
-      : ctx.db.query('borrowRequests').withIndex('by_borrowerId_and_status', q => q.eq('borrowerId', user._id))).paginate(args.paginationOpts)
+      ? ctx.db.query('borrowRequests').withIndex('by_lenderId_and_startAt', q => q.eq('lenderId', user._id))
+      : ctx.db.query('borrowRequests').withIndex('by_borrowerId_and_startAt', q => q.eq('borrowerId', user._id))).order('asc').paginate(args.paginationOpts)
     const page = await Promise.all(rows.page.map(async row => {
+      if (row.status !== 'pending' && row.status !== 'approved') return null
       const tool = await ctx.db.get('tools', row.toolId)
       if (!tool) return null
       const category = await ctx.db.get('categories', tool.categoryId)
-      return { id: row._id, toolId: tool._id, name: tool.name, category: category?.name ?? '', description: tool.description, condition: tool.condition, status: row.status, startAt: row.startAt, endAt: row.endAt }
+      const loan = await ctx.db.query('loans').withIndex('by_requestId', q => q.eq('requestId', row._id)).unique()
+      if (loan && (loan.status === 'returned' || loan.status === 'cancelled')) return null
+      const borrower = args.incoming ? await ctx.db.get('users', row.borrowerId) : null
+      return { id: row._id, toolId: tool._id, name: tool.name, category: category?.name ?? '', description: tool.description, condition: tool.condition, status: row.status, startAt: row.startAt, endAt: row.endAt,
+        borrowerName: args.incoming ? borrower?.name.trim() || 'Neighbor' : null,
+        loanId: loan?._id ?? null, loanStatus: loan?.status ?? null, dueAt: loan?.dueAt ?? null, activity: await latestActivity(ctx, row._id) }
     }))
     return { ...rows, page: page.filter(row => row !== null) }
-  },
-})
-
-export const notifications = query({
-  args: {}, returns: v.array(v.object({ id: v.id('borrowRequests'), name: v.string() })),
-  handler: async ctx => {
-    const user = await requireUser(ctx)
-    const rows = await ctx.db.query('borrowRequests').withIndex('by_lenderId_and_status', q => q.eq('lenderId', user._id).eq('status', 'pending')).order('desc').take(10)
-    return Promise.all(rows.map(async row => ({ id: row._id, name: (await ctx.db.get('tools', row.toolId))?.name ?? 'Tool' })))
   },
 })
 
@@ -49,7 +48,7 @@ export const removeTool = mutation({
 
 export const loans = query({
   args: { paginationOpts: paginationOptsValidator },
-  returns: paginationResultValidator(v.object({ id: v.id('loans'), toolId: v.id('tools'), name: v.string(), category: v.string(), description: v.string(), condition: toolCondition, status: v.string(), dueAt: v.number() })),
+  returns: paginationResultValidator(v.object({ id: v.id('loans'), toolId: v.id('tools'), name: v.string(), category: v.string(), description: v.string(), condition: toolCondition, status: v.string(), dueAt: v.number(), activity: activityValidator })),
   handler: async (ctx, args) => {
     await requireAdmin(ctx)
     const rows = await ctx.db.query('loans').withIndex('by_status_and_dueAt').paginate(args.paginationOpts)
@@ -57,7 +56,7 @@ export const loans = query({
       const tool = await ctx.db.get('tools', row.toolId)
       if (!tool) return null
       const category = await ctx.db.get('categories', tool.categoryId)
-      return { id: row._id, toolId: tool._id, name: tool.name, category: category?.name ?? '', description: tool.description, condition: tool.condition, status: row.status, dueAt: row.dueAt }
+      return { id: row._id, toolId: tool._id, name: tool.name, category: category?.name ?? '', description: tool.description, condition: tool.condition, status: row.status, dueAt: row.dueAt, activity: await latestActivity(ctx, row.requestId) }
     }))
     return { ...rows, page: page.filter(row => row !== null) }
   },

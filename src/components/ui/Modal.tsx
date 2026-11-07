@@ -29,7 +29,7 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
   return createPortal(
     <dialog ref={dialog} aria-labelledby={titleId} onClick={outsideClick}
       onCancel={event => { event.preventDefault(); close.current() }}
-      style={{ margin: 'auto', inset: 0 }}
+      style={{ margin: 'auto', inset: 0, width: 'min(40rem, calc(100vw - 2rem))', maxWidth: 'min(40rem, calc(100vw - 2rem))' }}
       className="fixed max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-2xl overflow-y-auto rounded-2xl border border-stone-200 bg-white p-0 shadow-xl backdrop:bg-black/40">
       <div className="p-5 sm:p-6">
         <div className="mb-5 flex items-start justify-between gap-4">

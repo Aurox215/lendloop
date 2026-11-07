@@ -6,7 +6,15 @@ import { api, internal } from './_generated/api'
 import { defineSchema, defineTable } from 'convex/server'
 import { v } from 'convex/values'
 import schema from './schema'
+import type { BusinessResult } from '../shared/result'
 import { TEXT_LIMITS, textError } from '../shared/textLimits'
+
+// Unwrap successful results in existing behavior tests; validation tests assert raw results.
+async function value<T>(promise: Promise<BusinessResult<T>>): Promise<T> {
+  const result = await promise
+  if (!result.ok) throw new Error(result.message)
+  return result.value
+}
 
 const modules = import.meta.glob('./**/*.ts')
 const now = 1_800_000_000_000
@@ -89,7 +97,7 @@ describe('Dashboard', () => {
     expect(all).toHaveLength(16)
     expect(new Set(all.map(row => row.id)).size).toBe(all.length)
     expect(all.some(row => row.id === ids.tools[0])).toBe(false)
-    for (const row of all) expect(Object.keys(row).sort()).toEqual(['category', 'condition', 'description', 'id', 'name'])
+    for (const row of all) expect(Object.keys(row).sort()).toEqual(['category', 'id', 'name'])
   })
 
   test('search and category filters apply before pagination', async () => {
@@ -134,13 +142,13 @@ describe('Dashboard', () => {
     expect((await admin.query(api.workspace.loans, { paginationOpts })).page.map(row => row.id)).toEqual([ids.loan])
   })
 
-  test('scheduled bookings block only their current interval; returned loans release tools', async () => {
+  test('unreturned reservations stay off the public available catalog; returns release tools', async () => {
     const { t, ids } = await fixture()
     await t.run(ctx => ctx.db.patch('loans', ids.loan, { status: 'scheduled' }))
     const current = await t.query(api.catalog.publicTools, { search: 'Drill 0', now, paginationOpts })
     expect(current.page.some(row => row.id === ids.tools[0])).toBe(false)
     const future = await t.query(api.catalog.publicTools, { search: 'Drill 0', now: now - 2000, paginationOpts })
-    expect(future.page.some(row => row.id === ids.tools[0])).toBe(true)
+    expect(future.page.some(row => row.id === ids.tools[0])).toBe(false)
     await t.run(ctx => ctx.db.patch('loans', ids.loan, { status: 'returned' }))
     const returned = await t.query(api.catalog.publicTools, { search: 'Drill 0', now, paginationOpts })
     expect(returned.page.some(row => row.id === ids.tools[0])).toBe(true)
@@ -188,14 +196,8 @@ describe('Ownership and roles', () => {
     expect((await other.query(api.workspace.requests, { incoming: false, paginationOpts })).page.map(row => row.id)).toEqual([ids.request])
   })
 
-  test('notifications stay scoped to the lender and disabled admins lose access', async () => {
-    const { t, user, other, admin, ids } = await fixture()
-    await t.run(ctx => ctx.db.insert('borrowRequests', {
-      toolId: ids.otherTool, borrowerId: ids.user, lenderId: ids.other,
-      startAt: now + 1000, endAt: now + 2000, status: 'pending', statusVersion: 1, updatedAt: now,
-    }))
-    expect(await user.query(api.workspace.notifications, {})).toEqual([])
-    expect((await other.query(api.workspace.notifications, {})).map(row => row.name)).toEqual(['Sander'])
+  test('disabled admins lose access', async () => {
+    const { t, admin, ids } = await fixture()
     await t.run(ctx => ctx.db.patch('users', ids.admin, { isActive: false }))
     await expect(admin.query(api.workspace.loans, { paginationOpts })).rejects.toThrow('Active account required')
     await expect(admin.mutation(api.adminUsers.update, { userId: ids.other, trusted: true })).rejects.toThrow('Active account required')
@@ -242,17 +244,17 @@ describe('Text limits and full-text access', () => {
       name: 'T'.repeat(TEXT_LIMITS.title), description: 'D'.repeat(TEXT_LIMITS.description),
       condition: 'good' as const, categoryId: ids.category,
     }
-    const toolId = await user.mutation(api.tools.create, fields)
-    await user.mutation(api.tools.update, { toolId, ...fields })
-    const detail = await user.query(api.tools.detail, { toolId })
+    const toolId = await value(user.mutation(api.tools.create, { ...fields, clientKey: 'unit-15321' }))
+    await value(user.mutation(api.tools.update, { toolId, ...fields }))
+    const detail = await user.query(api.tools.detail, { now: Date.now(), toolId })
     expect(detail?.name).toBe(fields.name)
     expect(detail?.description).toBe(fields.description)
     for (const invalid of [{ ...fields, name: `${fields.name}x` }, { ...fields, description: `${fields.description}x` }]) {
-      await expect(user.mutation(api.tools.create, invalid)).rejects.toThrow('characters or fewer')
-      await expect(user.mutation(api.tools.update, { toolId, ...invalid })).rejects.toThrow('characters or fewer')
+      await expect(value(user.mutation(api.tools.create, { ...invalid, clientKey: 'unit-15736' }))).rejects.toThrow('characters or fewer')
+      await expect(value(user.mutation(api.tools.update, { toolId, ...invalid }))).rejects.toThrow('characters or fewer')
     }
-    await expect(user.mutation(api.tools.create, { ...fields, name: '   ' })).rejects.toThrow('Title is required')
-    await expect(user.mutation(api.tools.update, { toolId, ...fields, description: '\n ' })).rejects.toThrow('Description is required')
+    await expect(value(user.mutation(api.tools.create, { clientKey: 'unit-15955', ...fields, name: '   ' }))).rejects.toThrow('Title is required')
+    await expect(value(user.mutation(api.tools.update, { toolId, ...fields, description: '\n ' }))).rejects.toThrow('Description is required')
   })
 
   test('category mutations enforce forty characters and admin access', async () => {
@@ -269,9 +271,9 @@ describe('Text limits and full-text access', () => {
   test('rejects anonymous creation and editing another owner’s tool, including by admins', async () => {
     const { t, user, admin, ids } = await fixture()
     const fields = { name: 'Valid title', description: 'Valid description', condition: 'good' as const, categoryId: ids.category }
-    await expect(t.mutation(api.tools.create, fields)).rejects.toThrow('Sign in required')
-    await expect(user.mutation(api.tools.update, { toolId: ids.otherTool, ...fields })).rejects.toThrow('only your own listings')
-    await expect(admin.mutation(api.tools.update, { toolId: ids.otherTool, ...fields })).rejects.toThrow('only your own listings')
+    await expect(value(t.mutation(api.tools.create, { ...fields, clientKey: 'unit-17351' }))).rejects.toThrow('Sign in required')
+    await expect(value(user.mutation(api.tools.update, { toolId: ids.otherTool, ...fields }))).rejects.toThrow('only your own listings')
+    await expect(value(admin.mutation(api.tools.update, { toolId: ids.otherTool, ...fields }))).rejects.toThrow('only your own listings')
   })
 
   test('detail queries preserve complete legacy text and protect private listings', async () => {
@@ -281,21 +283,21 @@ describe('Text limits and full-text access', () => {
     const category = 'LongUnbrokenCategory'.repeat(10)
     await t.run(ctx => ctx.db.patch('categories', ids.category, { name: category }))
     await t.run(ctx => ctx.db.patch('tools', ids.otherTool, { name, description, status: 'paused' }))
-    expect(await t.query(api.tools.detail, { toolId: ids.otherTool })).toBeNull()
-    expect(await user.query(api.tools.detail, { toolId: ids.otherTool })).toBeNull()
-    const detail = await other.query(api.tools.detail, { toolId: ids.otherTool })
+    await expect(t.query(api.tools.detail, { now: Date.now(), toolId: ids.otherTool })).rejects.toThrow('Sign in required')
+    expect(await user.query(api.tools.detail, { now: Date.now(), toolId: ids.otherTool })).toBeNull()
+    const detail = await other.query(api.tools.detail, { now: Date.now(), toolId: ids.otherTool })
     expect(detail?.name).toBe(name)
     expect(detail?.description).toBe(description)
     expect(detail?.category).toBe(category)
     expect(detail?.canEdit).toBe(true)
-    expect(await t.query(api.tools.detail, { toolId: 'invalid' })).toBeNull()
+    await expect(t.query(api.tools.detail, { now: Date.now(), toolId: 'invalid' })).rejects.toThrow('Sign in required')
   })
 
   test('request participants retain full-text access after a listing is removed', async () => {
     const { t, other, ids } = await fixture()
     await t.run(ctx => ctx.db.patch('tools', ids.tools[0], { status: 'removed' }))
-    expect(await t.query(api.tools.detail, { toolId: ids.tools[0] })).toBeNull()
-    expect((await other.query(api.tools.detail, { toolId: ids.tools[0] }))?.name).toBe('Drill 0')
+    await expect(t.query(api.tools.detail, { now: Date.now(), toolId: ids.tools[0] })).rejects.toThrow('Sign in required')
+    expect((await other.query(api.tools.detail, { now: Date.now(), toolId: ids.tools[0] }))?.name).toBe('Drill 0')
   })
 
   test('shared frontend validation matches maxLength and never truncates input', () => {
@@ -385,16 +387,14 @@ describe('Admin management and audit logging', () => {
     expect(rows[0]).toMatchObject({ actorId: ids.user, targetId: ids.tools[1] })
   })
 
-  test('failed writes are logged without raw form contents or partial audit records', async () => {
+  test('expected validation returns a safe response without error logs or partial audit records', async () => {
     const { t, user, ids } = await fixture()
     const logger = vi.spyOn(console, 'error').mockImplementation(() => {})
     const payload = 'SensitiveUserInput'.repeat(20)
     try {
-      await expect(user.mutation(api.tools.create, { name: payload, categoryId: ids.category, description: 'Description', condition: 'good' })).rejects.toThrow('80 characters or fewer')
-      expect(logger).toHaveBeenCalled()
+      await expect(user.mutation(api.tools.create, { clientKey: 'unit-25495', name: payload, categoryId: ids.category, description: 'Description', condition: 'good' })).resolves.toMatchObject({ ok: false, code: 'INVALID_TEXT', message: expect.stringContaining('80 characters or fewer') })
+      expect(logger).not.toHaveBeenCalled()
       const output = JSON.stringify(logger.mock.calls)
-      expect(output).toContain('operation.failed')
-      expect(output).toContain('tool.create')
       expect(output).not.toContain(payload)
       expect(await t.run(ctx => ctx.db.query('auditLogs').withIndex('by_createdAt').take(10))).toEqual([])
     } finally { logger.mockRestore() }
@@ -452,5 +452,23 @@ describe('Seed data and categories', () => {
     expect(row).not.toHaveProperty('slug')
     expect(row).not.toHaveProperty('description')
     expect((await t.mutation(internal.categoryMigration.removeLegacyFields, {})).migrated).toBe(0)
+  })
+})
+
+
+describe('Listing identity and retries', () => {
+  test('duplicates are scoped to owner/category, normalized, and rejected as normal responses', async () => {
+    const { t, ids, user, other } = await fixture()
+    const fields = { name: ' New   Drill ', description: 'A drill', condition: 'good' as const, categoryId: ids.category, clientKey: 'listing-key' }
+    const first = await user.mutation(api.tools.create, fields)
+    expect(first.ok).toBe(true)
+    expect(await user.mutation(api.tools.create, fields)).toEqual(first)
+    await expect(user.mutation(api.tools.create, { ...fields, clientKey: 'second-key', name: 'new drill' })).resolves.toMatchObject({ ok: false, code: 'DUPLICATE_TOOL' })
+    await expect(user.mutation(api.tools.create, { ...fields, description: 'Changed' })).resolves.toMatchObject({ ok: false, code: 'SUBMISSION_CONFLICT' })
+    expect((await other.mutation(api.tools.create, fields)).ok).toBe(true)
+    const categoryId = await t.run(ctx => ctx.db.insert('categories', { name: 'Other', isActive: true, sortOrder: 1, updatedAt: now }))
+    expect((await user.mutation(api.tools.create, { ...fields, categoryId, clientKey: 'different-category' })).ok).toBe(true)
+    await expect(user.mutation(api.tools.update, { toolId: ids.tools[1], name: 'NEW DRILL', categoryId: ids.category, description: 'Updated', condition: 'good' })).resolves.toMatchObject({ ok: false, code: 'DUPLICATE_TOOL' })
+    expect((await t.run(ctx => ctx.db.get('tools', ids.tools[1])))?.name).toBe('Drill 1')
   })
 })

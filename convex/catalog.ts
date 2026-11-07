@@ -1,12 +1,13 @@
 import { paginationOptsValidator, paginationResultValidator } from 'convex/server'
 import { v } from 'convex/values'
 import { query, type QueryCtx } from './_generated/server'
-import type { Id } from './_generated/dataModel'
+import type { Doc, Id } from './_generated/dataModel'
+import { toolAvailability, availabilityStatus } from './availability'
 import { requireAdmin, requireUser } from './access'
 import { toolCondition } from './schema'
 import { normalizeSearch, searchWeight } from './toolSearch'
 
-const toolRow = v.object({ id: v.id('tools'), name: v.string(), category: v.string(), description: v.string(), condition: toolCondition })
+const toolRow = v.object({ id: v.id('tools'), name: v.string(), category: v.string(), description: v.string(), condition: toolCondition, isOwner: v.boolean(), canBorrow: v.boolean(), availability: availabilityStatus })
 const args = {
   categoryId: v.optional(v.id('categories')), search: v.optional(v.string()),
   now: v.number(), paginationOpts: paginationOptsValidator,
@@ -20,14 +21,7 @@ export const categories = query({
   },
 })
 
-async function available(ctx: QueryCtx, toolId: Id<'tools'>, now: number) {
-  const active = await ctx.db.query('loans').withIndex('by_toolId_and_status_and_startAt', q => q.eq('toolId', toolId).eq('status', 'active')).first()
-  if (active) return false
-  const scheduled = await ctx.db.query('loans').withIndex('by_toolId_and_status_and_startAt', q => q.eq('toolId', toolId).eq('status', 'scheduled').lte('startAt', now)).order('desc').first()
-  return !scheduled || scheduled.dueAt <= now
-}
-
-async function tools(ctx: QueryCtx, args: { categoryId?: Id<'categories'>; search?: string; now: number; paginationOpts: { numItems: number; cursor: string | null } }, ownerId?: Id<'users'>, onlyAvailable = true) {
+async function tools(ctx: QueryCtx, args: { categoryId?: Id<'categories'>; search?: string; now: number; paginationOpts: { numItems: number; cursor: string | null } }, ownerId?: Id<'users'>, onlyAvailable = true, viewer: Doc<'users'> | null = null) {
   const categoryId = args.categoryId
   const search = normalizeSearch(args.search ?? '')
   let phase = 0
@@ -59,8 +53,12 @@ async function tools(ctx: QueryCtx, args: { categoryId?: Id<'categories'>; searc
     if (tool.status === 'removed' || (categoryId && tool.categoryId !== categoryId)) return null
     if (search && searchWeight(tool, search) !== 3 - phase) return null
     const category = await ctx.db.get('categories', tool.categoryId)
-    if (!category || (onlyAvailable && (!category.isActive || !await available(ctx, tool._id, args.now)))) return null
-    return { id: tool._id, name: tool.name, category: category.name, description: tool.description, condition: tool.condition }
+    if (!category || (!category.isActive && onlyAvailable)) return null
+    const availability = await toolAvailability(ctx, tool, category.isActive, args.now)
+    if (onlyAvailable && !viewer && availability !== 'available') return null
+    const isOwner = viewer?._id === tool.ownerId
+    return { id: tool._id, name: tool.name, category: category.name, description: tool.description, condition: tool.condition, isOwner,
+      availability, canBorrow: !isOwner && availability === 'available' }
   }))
   const nextPhase = search && result.isDone && phase < 2
   return {
@@ -70,15 +68,24 @@ async function tools(ctx: QueryCtx, args: { categoryId?: Id<'categories'>; searc
   }
 }
 
-export const publicTools = query({ args, returns: paginationResultValidator(toolRow), handler: (ctx, args) => tools(ctx, args) })
+export const publicTools = query({
+  args, returns: paginationResultValidator(v.object({ id: v.id('tools'), name: v.string(), category: v.string() })),
+  handler: async (ctx, args) => {
+    const rows = await tools(ctx, args)
+    return { ...rows, page: rows.page.map(({ id, name, category }) => ({ id, name, category })) }
+  },
+})
+export const memberTools = query({
+  args, returns: paginationResultValidator(toolRow), handler: async (ctx, args) => tools(ctx, args, undefined, true, await requireUser(ctx)),
+})
 export const myListings = query({
   args, returns: paginationResultValidator(toolRow),
-  handler: async (ctx, args) => tools(ctx, args, (await requireUser(ctx))._id, false),
+  handler: async (ctx, args) => { const user = await requireUser(ctx); return tools(ctx, args, user._id, false, user) },
 })
 export const adminTools = query({
   args, returns: paginationResultValidator(toolRow),
   handler: async (ctx, args) => {
-    await requireAdmin(ctx)
-    return tools(ctx, args, undefined, false)
+    const user = await requireAdmin(ctx)
+    return tools(ctx, args, undefined, false, user)
   },
 })

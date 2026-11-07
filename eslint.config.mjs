@@ -13,6 +13,8 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
     "convex/_generated/**",
+    // n8n Code node snippets use globals supplied by the workflow runtime.
+    "n8n/code/**",
   ]),
 ]);
 

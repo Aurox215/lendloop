@@ -27,6 +27,7 @@ export function ToolForm({ tool, onSaved, onCancel }: { tool?: EditableTool; onS
   const [condition, setCondition] = useState<Doc<'tools'>['condition']>(tool?.condition ?? 'good')
   const [categoryId, setCategoryId] = useState(tool?.categoryId ?? '')
   const [pending, setPending] = useState(false)
+  const [clientKey] = useState(() => crypto.randomUUID())
   const [error, setError] = useState('')
   const mounted = useMounted()
 
@@ -46,10 +47,13 @@ export function ToolForm({ tool, onSaved, onCancel }: { tool?: EditableTool; onS
       const fields = { name, description, condition, categoryId: categoryId as Id<'categories'> }
       let id: Id<'tools'>
       if (tool) {
-        await update({ ...fields, toolId: tool.id })
+        const result = await update({ ...fields, toolId: tool.id })
+        if (!result.ok) { toast.warning(result.message); if (mounted.current) setError(result.message); return }
         id = tool.id
       } else {
-        id = await create(fields)
+        const result = await create({ ...fields, clientKey })
+        if (!result.ok) { toast.warning(result.message); if (mounted.current) setError(result.message); return }
+        id = result.value
       }
       toast.success(tool ? 'Listing updated.' : 'Listing created.')
       if (mounted.current) {
