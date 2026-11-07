@@ -1,0 +1,48 @@
+{
+  "id": "lendloop-errors",
+  "name": "LendLoop · Automation errors",
+  "active": false,
+  "nodes": [
+    {
+      "id": "execution-failed",
+      "name": "Execution failed",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "parameters": {},
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "id": "log-failure",
+      "name": "Log failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "const data=$input.first().json; console.error(JSON.stringify({event:'workflow.failed',workflowId:data.workflow?.id,executionId:data.execution?.id})); return [{json:{failed:true}}];"
+      },
+      "position": [
+        240,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Execution failed": {
+      "main": [
+        [
+          {
+            "node": "Log failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all"
+  }
+}
