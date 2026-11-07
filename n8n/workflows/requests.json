@@ -1,0 +1,216 @@
+{
+  "id": "lendloop-requests",
+  "name": "LendLoop · Request notifications",
+  "active": false,
+  "nodes": [
+    {
+      "id": "borrow-webhook",
+      "name": "Borrow webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lendloop-requests",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "lendloop-requests"
+    },
+    {
+      "id": "validate-envelope",
+      "name": "Validate envelope",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst timestamp = String(input.headers?.['x-lendloop-timestamp'] ?? '');\nconst supplied = String(input.headers?.['x-lendloop-signature'] ?? '');\nconst payload = input.body?.payload;\nif (typeof payload !== 'string' || payload.length > 16384 || !/^\\d+$/.test(timestamp) ||\n  Math.abs(Date.now() - Number(timestamp) * 1000) > 300000 || !/^[a-f0-9]{64}$/.test(supplied)) throw new Error('Invalid webhook signature.');\nreturn [{ json: { timestamp, supplied, payload, signingInput: `${timestamp}.${payload}` } }];\n"
+      },
+      "position": [
+        200,
+        0
+      ]
+    },
+    {
+      "id": "verify-webhook-hmac",
+      "name": "Verify webhook HMAC",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 2,
+      "parameters": {
+        "action": "hmac",
+        "type": "SHA256",
+        "binaryData": false,
+        "value": "={{$json.signingInput}}",
+        "dataPropertyName": "expectedSignature",
+        "encoding": "hex"
+      },
+      "position": [
+        400,
+        0
+      ],
+      "notes": "Select the LendLoop HMAC credential. Never enter the secret in node parameters."
+    },
+    {
+      "id": "verify-and-notify",
+      "name": "Verify and notify",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "// Public configuration, substituted when workflows are generated.\nconst convexOrigin = \"https://scintillating-shepherd-249.eu-west-1.convex.site\";\nfunction prepareRequest(path, value) {\n  if (!convexOrigin.startsWith('https://')) throw new Error('Configure the Convex HTTPS origin.');\n  const body = JSON.stringify(value);\n  const timestamp = String(Math.floor(Date.now() / 1000));\n  return { url: convexOrigin.replace(/\\/$/, '') + path, body, timestamp,\n    signingInput: `${timestamp}.POST.${path}.${body}` };\n}\n\nconst input = $input.first().json;\n// expectedSignature is produced by Crypto v2 using an encrypted n8n credential.\nconst expected = input.expectedSignature;\nif (typeof expected !== 'string' || !/^[a-f0-9]{64}$/.test(expected) ||\n  typeof input.supplied !== 'string' || !/^[a-f0-9]{64}$/.test(input.supplied) ||\n  Math.abs(Date.now() - Number(input.timestamp) * 1000) > 300000) throw new Error('Invalid webhook signature.');\nlet difference = 0;\nfor (let i = 0; i < 64; i++) difference |= expected.charCodeAt(i) ^ input.supplied.charCodeAt(i);\nif (difference !== 0) throw new Error('Invalid webhook signature.');\nconst event = JSON.parse(input.payload);\nif (!event || typeof event.eventId !== 'string' || typeof event.idempotencyKey !== 'string' ||\n  typeof event.title !== 'string' || typeof event.message !== 'string') throw new Error('Invalid notification.');\n// Mock delivery: in-app alarms already exist durably. Log metadata, never emails or secrets.\nconst recipients = event.notifications ?? [{ recipientKey: event.eventId, title: event.title, message: event.message, href: event.href }];\nif (!Array.isArray(recipients) || recipients.length === 0 || recipients.length > 10 || recipients.some(item => typeof item.recipientKey !== 'string' || typeof item.title !== 'string' || typeof item.message !== 'string')) throw new Error('Invalid recipients.');\nfor (const recipient of recipients) {\n  console.log(JSON.stringify({ event: 'notification.mock', eventId: event.eventId, kind: event.kind, recipientKey: recipient.recipientKey, title: recipient.title }));\n}\nreturn [{ json: prepareRequest('/automation/complete', { eventId: event.eventId, idempotencyKey: event.idempotencyKey }) }];\n"
+      },
+      "position": [
+        600,
+        0
+      ]
+    },
+    {
+      "id": "sign-completion",
+      "name": "Sign completion",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 2,
+      "parameters": {
+        "action": "hmac",
+        "type": "SHA256",
+        "binaryData": false,
+        "value": "={{$json.signingInput}}",
+        "dataPropertyName": "signature",
+        "encoding": "hex"
+      },
+      "position": [
+        800,
+        0
+      ],
+      "notes": "Select the LendLoop HMAC credential. Never enter the secret in node parameters."
+    },
+    {
+      "id": "record-delivery",
+      "name": "Record delivery",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "method": "POST",
+        "url": "={{$json.url}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-lendloop-timestamp",
+              "value": "={{$json.timestamp}}"
+            },
+            {
+              "name": "x-lendloop-signature",
+              "value": "={{$json.signature}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{$json.body}}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "position": [
+        1000,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    },
+    {
+      "id": "acknowledge",
+      "name": "Acknowledge",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"delivered\":true}",
+        "options": {}
+      },
+      "position": [
+        1200,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Borrow webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate envelope",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate envelope": {
+      "main": [
+        [
+          {
+            "node": "Verify webhook HMAC",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify webhook HMAC": {
+      "main": [
+        [
+          {
+            "node": "Verify and notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify and notify": {
+      "main": [
+        [
+          {
+            "node": "Sign completion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign completion": {
+      "main": [
+        [
+          {
+            "node": "Record delivery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record delivery": {
+      "main": [
+        [
+          {
+            "node": "Acknowledge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "lendloop-errors",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none",
+    "executionTimeout": 300,
+    "timezone": "UTC"
+  }
+}
